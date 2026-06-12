@@ -1,5 +1,5 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { Camera, Upload, Trash2, Shield, AlertCircle, Info, Plus, RotateCcw } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Camera, Shield, AlertCircle } from 'lucide-react';
 import type { Meal } from '../types';
 
 interface CameraCaptureProps {
@@ -7,235 +7,98 @@ interface CameraCaptureProps {
 }
 
 export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete }) => {
-  const [images, setImages] = useState<string[]>([]);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [referenceObject, setReferenceObject] = useState<string>('');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [statusMessage, setStatusMessage] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Manage camera stream lifecycle inside a useEffect triggered by cameraActive
-  useEffect(() => {
-    let activeStream: MediaStream | null = null;
-    
-    const setupCamera = async () => {
-      setError(null);
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }, // Default to rear camera on mobile
-          audio: false
-        });
-        activeStream = stream;
-        
-        // Wait a tiny fraction of a second for React's render loop to bind the ref
-        if (!videoRef.current) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          const playPromise = videoRef.current.play();
-          if (playPromise !== undefined) {
-            playPromise.catch(error => {
-              console.error("Auto-play failed:", error);
-            });
-          }
-        }
-      } catch (err: any) {
-        console.error("Camera access failed:", err);
-        setError("Unable to access camera. Please upload an image or check permissions.");
-        setCameraActive(false);
-      }
-    };
-
-    if (cameraActive) {
-      setupCamera();
-    }
-
-    return () => {
-      if (activeStream) {
-        activeStream.getTracks().forEach(track => track.stop());
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-    };
-  }, [cameraActive]);
-
-  const startCamera = () => {
-    setError(null);
-    setCameraActive(true);
-  };
-
-  const stopCamera = () => {
-    setCameraActive(false);
-  };
-
+  // Safe client-side image compression with timeout to prevent hangs
   const compressImage = (base64Str: string): Promise<string> => {
     return new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800;
-        const MAX_HEIGHT = 800;
-        let width = img.width;
-        let height = img.height;
+      let resolved = false;
 
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height = Math.round((height * MAX_WIDTH) / width);
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width = Math.round((width * MAX_HEIGHT) / height);
-            height = MAX_HEIGHT;
-          }
+      // Fail-safe: if image processing hangs, resolve with the original image after 800ms
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.warn("Image compression timed out. Using original image.");
+          resolve(base64Str);
         }
+      }, 800);
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', 0.75));
-        } else {
+      img.onload = () => {
+        if (resolved) return;
+        clearTimeout(timeout);
+        resolved = true;
+
+        try {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 800;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height = Math.round((height * MAX_WIDTH) / width);
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width = Math.round((width * MAX_HEIGHT) / height);
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.75));
+          } else {
+            resolve(base64Str);
+          }
+        } catch (err) {
+          console.error("Canvas compression failed, using original base64:", err);
           resolve(base64Str);
         }
       };
+
       img.onerror = () => {
+        if (resolved) return;
+        clearTimeout(timeout);
+        resolved = true;
         resolve(base64Str);
       };
+
       img.src = base64Str;
     });
   };
 
-  const capturePhoto = async () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-
-      if (context) {
-        // Match canvas dimensions to video feed, with safe defaults to avoid 0x0 canvas errors in Safari
-        const width = video.videoWidth || 640;
-        const height = video.videoHeight || 480;
-        canvas.width = width;
-        canvas.height = height;
-        context.drawImage(video, 0, 0, width, height);
-        
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        stopCamera();
-
-        setLoading(true);
-        try {
-          const compressed = await compressImage(dataUrl);
-          if (images.length < 3) {
-            setImages(prev => [...prev, compressed]);
-          } else {
-            setError("You can upload a maximum of 3 images.");
-          }
-        } catch (err) {
-          console.error("Image compression error:", err);
-          if (images.length < 3) {
-            setImages(prev => [...prev, dataUrl]);
-          }
-        } finally {
-          setLoading(false);
-        }
-      }
-    }
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setError(null);
-    const files = e.target.files;
-    if (!files) return;
-
-    Array.from(files).forEach(file => {
-      const fileExt = file.name.split('.').pop()?.toLowerCase();
-      const isValidType = 
-        ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(file.type) || 
-        ['jpeg', 'jpg', 'png', 'webp', 'heic', 'heif'].includes(fileExt || '');
-
-      if (!isValidType) {
-        setError("Unsupported format. Use JPG, PNG, or WEBP.");
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result && typeof event.target.result === 'string') {
-          setLoading(true);
-          compressImage(event.target.result)
-            .then(compressed => {
-              setImages(prev => {
-                if (prev.length < 3) {
-                  return [...prev, compressed];
-                } else {
-                  setError("You can upload a maximum of 3 images.");
-                  return prev;
-                }
-              });
-            })
-            .catch(err => {
-              console.error("Upload compression error:", err);
-              setImages(prev => {
-                if (prev.length < 3) {
-                  return [...prev, event.target!.result as string];
-                } else {
-                  setError("You can upload a maximum of 3 images.");
-                  return prev;
-                }
-              });
-            })
-            .finally(() => {
-              setLoading(false);
-            });
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-
-    // Reset input value so the same file can be uploaded again if deleted
-    if (e.target) {
-      e.target.value = '';
-    }
-  };
-
-  const removeImage = (index: number) => {
-    setImages(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const triggerUpload = () => {
-    fileInputRef.current?.click();
-  };
-
-  const startAnalysis = async () => {
-    if (images.length === 0) {
-      setError("Please capture or upload at least one image.");
-      return;
-    }
-
+  // Perform food scanning and API processing
+  const processAndScanFood = async (base64Image: string) => {
     setLoading(true);
     setError(null);
+    setStatusMessage('Compiling visual indicators...');
 
     try {
+      // 1. Compress image to reduce network payloads
+      setStatusMessage('Optimizing image footprint...');
+      const compressedImage = await compressImage(base64Image);
+
+      // 2. Call backend /api/analyze-food or fall back to mock
+      setStatusMessage('Running deep AI scan...');
       let mealData;
       let callSuccessful = false;
 
       try {
-        // Netlify Function API endpoint call
         const response = await fetch('/api/analyze-food', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image: images[0], // Send first image for primary vision analysis
-            referenceObject
-          })
+          body: JSON.stringify({ image: compressedImage })
         });
 
         if (response.ok) {
@@ -245,14 +108,12 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
           }
         }
       } catch (apiErr) {
-        console.warn("API call failed, attempting local mock fallback...", apiErr);
+        console.warn("API scan failed, using fallback mock analyzer...", apiErr);
       }
 
       if (!callSuccessful) {
-        // Fall back to client-side mock so the user can test the UI easily in development
-        console.info("Using client-side mock food analysis.");
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate loading delay
-        
+        // Mock data matching the OpenAI serverless responses
+        await new Promise(resolve => setTimeout(resolve, 1800)); // Simulate scanner sweep delay
         const isPaneer = Math.random() > 0.5;
         mealData = isPaneer ? {
           "meal_name": "Paneer Butter Masala & Garlic Naan",
@@ -541,247 +402,181 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
         };
       }
 
-      onAnalysisComplete(mealData, images);
+      onAnalysisComplete(mealData, [compressedImage]);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Something went wrong during food scan. Please try again.");
+      setError(err.message || "Failed to scan food image. Please try another image.");
+      setSelectedImage(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const referenceObjects = [
-    { id: 'spoon', label: '🥄 Spoon', desc: 'Standard dinner spoon' },
-    { id: 'fork', label: '🍴 Fork', desc: 'Standard dining fork' },
-    { id: 'hand', label: '✋ Hand', desc: 'Average adult palm' },
-    { id: 'coin', label: '🪙 Coin', desc: '1-inch coin reference' }
-  ];
+  // Handle image selection/capture
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+    const fileExt = file.name.split('.').pop()?.toLowerCase();
+    const isValid = 
+      ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(file.type) || 
+      ['jpeg', 'jpg', 'png', 'webp', 'heic', 'heif'].includes(fileExt || '');
+
+    if (!isValid) {
+      setError("Please select a valid image file (JPG, PNG, WEBP, or HEIC).");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result && typeof event.target.result === 'string') {
+        const base64Str = event.target.result;
+        setSelectedImage(base64Str);
+        // Start scanning automatically
+        processAndScanFood(base64Str);
+      }
+    };
+    reader.readAsDataURL(file);
+
+    // Reset input value so it triggers if they select the same file next time
+    if (e.target) {
+      e.target.value = '';
+    }
+  };
+
+  const triggerUpload = () => {
+    fileInputRef.current?.click();
+  };
 
   return (
-    <div className="max-w-xl mx-auto flex flex-col gap-6 animate-slide-up">
-      {/* Title */}
+    <div className="max-w-md mx-auto flex flex-col gap-6 animate-slide-up">
+      {/* Dynamic Keyframes injected into DOM */}
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes laser-sweep {
+          0%, 100% { top: 0%; opacity: 0.8; }
+          50% { top: 100%; opacity: 0.8; }
+        }
+        .laser-line {
+          animation: laser-sweep 2s infinite ease-in-out;
+        }
+      `}} />
+
+      {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold tracking-tight">Scan Meal</h2>
-        <p className="text-sm text-slate-500 dark:text-zinc-500">
-          Upload or snap a photo of your food. AI detects items, portion volume, and nutrition.
+        <h2 className="text-2xl font-bold tracking-tight text-slate-800 dark:text-zinc-100">AI Food Scanner</h2>
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">
+          Scan your meal using your camera or upload a photo to analyze portions and nutrition.
         </p>
       </div>
 
       {error && (
-        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 dark:text-rose-400 text-xs font-semibold px-4 py-3 rounded-2xl flex items-center gap-2 animate-scale-in">
+        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs font-semibold px-4 py-3 rounded-2xl flex items-center gap-2 animate-scale-in">
           <AlertCircle className="w-4.5 h-4.5 flex-shrink-0" />
           {error}
         </div>
       )}
 
-      {/* Camera Capture Stream */}
-      {cameraActive ? (
-        <div className="relative aspect-[4/3] rounded-3xl overflow-hidden bg-black border border-slate-200 dark:border-zinc-800 shadow-lg">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
-          {/* Grid overlay for framing */}
-          <div className="absolute inset-0 border border-white/10 pointer-events-none grid grid-cols-3 grid-rows-3">
-            <div className="border-r border-b border-white/10"></div>
-            <div className="border-r border-b border-white/10"></div>
-            <div className="border-b border-white/10"></div>
-            <div className="border-r border-b border-white/10"></div>
-            <div className="border-r border-b border-white/10"></div>
-            <div className="border-b border-white/10"></div>
-            <div className="border-r border-white/10"></div>
-            <div className="border-r border-white/10"></div>
-            <div></div>
-          </div>
-
-          {/* Capture controls */}
-          <div className="absolute bottom-6 left-0 right-0 flex justify-center items-center gap-6">
-            <button
-              onClick={stopCamera}
-              className="p-3.5 rounded-full bg-zinc-900/80 backdrop-blur-md text-white border border-zinc-800/80 hover:bg-zinc-800 transition-all duration-200"
-            >
-              <RotateCcw className="w-5 h-5" />
-            </button>
+      {/* Scanner Viewport */}
+      <div 
+        onClick={!loading ? triggerUpload : undefined}
+        className={`relative aspect-square w-full max-w-sm mx-auto rounded-[32px] overflow-hidden border-2 transition-all duration-300 shadow-xl flex flex-col items-center justify-center p-6 text-center group cursor-pointer ${
+          loading 
+            ? 'bg-zinc-950 border-emerald-500/40' 
+            : 'bg-white dark:bg-zinc-900 border-dashed border-slate-300 dark:border-zinc-800 hover:border-emerald-500/50'
+        }`}
+      >
+        {selectedImage ? (
+          // Preview showing selected image
+          <div className="absolute inset-0 w-full h-full">
+            <img src={selectedImage} alt="Scanning source" className="w-full h-full object-cover" />
             
-            <button
-              onClick={capturePhoto}
-              className="w-16 h-16 rounded-full bg-white border-[5px] border-emerald-500/30 flex items-center justify-center shadow-lg active:scale-95 transition-transform duration-150"
-              aria-label="Capture Photo"
-            >
-              <div className="w-11 h-11 rounded-full bg-emerald-500 hover:bg-emerald-400"></div>
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* Image Selection Area */
-        images.length === 0 && (
-          <div className="aspect-[4/3] border-2 border-dashed border-slate-300 dark:border-zinc-800 rounded-3xl flex flex-col items-center justify-center p-8 text-center gap-4 bg-white dark:bg-zinc-900 shadow-sm transition-all duration-300 hover:border-emerald-500/50">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center shadow-inner">
-              <Camera className="w-7 h-7" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-slate-800 dark:text-zinc-200">Snap or Upload Food</h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1 max-w-xs mx-auto">
-                Snap a picture on your camera or select images from your device gallery (JPG, PNG, WEBP).
-              </p>
+            {/* Dark tint overlay when scanning */}
+            {loading && <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] transition-all duration-300" />}
+
+            {/* Glowing brackets overlay */}
+            <div className="absolute inset-6 border border-white/10 pointer-events-none rounded-2xl">
+              <div className="absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 border-emerald-500 rounded-tl-md" />
+              <div className="absolute top-0 right-0 w-5 h-5 border-t-4 border-r-4 border-emerald-500 rounded-tr-md" />
+              <div className="absolute bottom-0 left-0 w-5 h-5 border-b-4 border-l-4 border-emerald-500 rounded-bl-md" />
+              <div className="absolute bottom-0 right-0 w-5 h-5 border-b-4 border-r-4 border-emerald-500 rounded-br-md" />
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm mt-2">
-              <button
-                onClick={startCamera}
-                className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl py-3 text-xs font-bold shadow-md shadow-emerald-500/10 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
-              >
-                <Camera className="w-4 h-4" />
-                Use Camera
-              </button>
-              
-              <button
-                onClick={triggerUpload}
-                className="flex-1 bg-slate-50 hover:bg-slate-100 dark:bg-zinc-950/60 dark:hover:bg-zinc-950 border border-slate-200 dark:border-zinc-850 text-slate-700 dark:text-zinc-300 rounded-2xl py-3 text-xs font-bold active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                Upload Photo
-              </button>
-            </div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-              className="hidden"
-              accept="image/*"
-              multiple
-            />
-          </div>
-        )
-      )}
-
-      {/* Previews and Multiple Image Management */}
-      {images.length > 0 && (
-        <div className="flex flex-col gap-5 bg-white dark:bg-zinc-900 border border-slate-200/50 dark:border-zinc-850 p-6 rounded-3xl shadow-sm">
-          <div className="flex justify-between items-center">
-            <h3 className="text-sm font-bold text-slate-800 dark:text-zinc-200">Selected Photos ({images.length}/3)</h3>
-            {images.length < 3 && !cameraActive && (
-              <button
-                onClick={triggerUpload}
-                className="text-xs text-emerald-500 font-bold hover:underline flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add image
-              </button>
+            {/* Laser scanning bar */}
+            {loading && (
+              <div className="absolute left-6 right-6 h-1 bg-gradient-to-r from-transparent via-emerald-500 to-transparent shadow-[0_0_12px_rgba(16,185,129,0.8)] laser-line" />
             )}
           </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            {images.map((img, idx) => (
-              <div key={idx} className="relative aspect-square rounded-2xl overflow-hidden group border border-slate-200 dark:border-zinc-800 shadow-sm">
-                <img src={img} alt="food scan preview" className="w-full h-full object-cover" />
-                <button
-                  onClick={() => removeImage(idx)}
-                  className="absolute top-1.5 right-1.5 p-1.5 rounded-lg bg-black/60 text-rose-400 border border-white/10 hover:bg-black transition-all duration-200"
-                  aria-label="Remove image"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* Reference Object Selection */}
-          <div className="flex flex-col gap-2.5 pt-3 border-t border-slate-100 dark:border-zinc-800">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-500">Reference Calibration</span>
-              <div className="group relative">
-                <Info className="w-3.5 h-3.5 text-slate-400" />
-                <span className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 hidden group-hover:block bg-zinc-950 text-white text-[10px] py-1 px-2.5 rounded-lg w-48 text-center shadow-lg border border-zinc-800">
-                  Placing a known object next to your plate helps the AI calibrate depth for exact volume scaling.
-                </span>
-              </div>
+        ) : (
+          // Viewport Empty State
+          <>
+            {/* Viewport Brackets */}
+            <div className="absolute inset-6 border border-slate-200/40 dark:border-zinc-800/40 pointer-events-none rounded-2xl group-hover:border-emerald-500/20 transition-all duration-300">
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-slate-300 dark:border-zinc-700 rounded-tl-lg group-hover:border-emerald-500 transition-all duration-300" />
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-slate-300 dark:border-zinc-700 rounded-tr-lg group-hover:border-emerald-500 transition-all duration-300" />
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-slate-300 dark:border-zinc-700 rounded-bl-lg group-hover:border-emerald-500 transition-all duration-300" />
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-slate-300 dark:border-zinc-700 rounded-br-lg group-hover:border-emerald-500 transition-all duration-300" />
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {referenceObjects.map(obj => (
-                <button
-                  key={obj.id}
-                  onClick={() => setReferenceObject(prev => prev === obj.id ? '' : obj.id)}
-                  className={`flex flex-col items-center justify-center p-3 rounded-2xl border text-center transition-all duration-200 ${
-                    referenceObject === obj.id
-                      ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-500'
-                      : 'bg-slate-50 dark:bg-zinc-950/60 border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-700 dark:text-zinc-300'
-                  }`}
-                >
-                  <span className="text-xs font-bold">{obj.label}</span>
-                  <span className="text-[9px] text-slate-400 dark:text-zinc-500 mt-0.5">{obj.desc}</span>
-                </button>
-              ))}
+            {/* Icon */}
+            <div className="w-20 h-20 rounded-3xl bg-emerald-500/10 dark:bg-emerald-500/5 text-emerald-500 flex items-center justify-center shadow-inner group-hover:scale-110 group-hover:bg-emerald-500/25 transition-all duration-300 animate-pulse">
+              <Camera className="w-10 h-10" />
             </div>
-          </div>
 
-          {/* Launch Buttons */}
-          <div className="flex gap-3 pt-3">
-            <button
-              onClick={() => {
-                setImages([]);
-                setError(null);
-                setReferenceObject('');
-              }}
-              className="px-5 bg-slate-50 hover:bg-slate-100 dark:bg-zinc-950/60 dark:hover:bg-zinc-950 border border-slate-200 dark:border-zinc-850 text-slate-700 dark:text-zinc-300 rounded-2xl text-xs font-bold active:scale-[0.98] transition-all duration-200"
-            >
-              Reset
-            </button>
-            <button
-              onClick={startAnalysis}
-              disabled={loading}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl py-3.5 text-sm font-bold shadow-md shadow-emerald-500/15 active:scale-[0.99] transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-75 disabled:pointer-events-none"
-            >
-              {loading ? (
-                <>
-                  <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                  Analyzing portion metrics...
-                </>
-              ) : (
-                'Run AI Nutrition Analysis'
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Processing Loader Overlay */}
-      {loading && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center gap-6 animate-fade-in">
-          <div className="relative">
-            {/* Spinning ring */}
-            <div className="w-20 h-20 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin"></div>
-            {/* Pulsing inner dot */}
-            <div className="absolute inset-4 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500">
-              <Camera className="w-6 h-6 animate-pulse" />
+            {/* Explanatory text */}
+            <div className="mt-6 z-10">
+              <h3 className="text-sm font-bold text-slate-700 dark:text-zinc-200">Tap to Scan Food</h3>
+              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1.5 max-w-[200px] mx-auto leading-relaxed">
+                Take a photo or choose an existing image from your gallery.
+              </p>
             </div>
-          </div>
+          </>
+        )}
 
-          <div className="flex flex-col gap-2 max-w-xs">
-            <h3 className="text-lg font-bold text-white flex items-center justify-center gap-1.5">
-              Analyzing Food Photo
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-            </h3>
-            <p className="text-xs text-zinc-400">
-              Running deep vision neural network. Detecting objects, plates, oils, and calibrating serving portion weights...
-            </p>
+        {/* Text showing current scanning state */}
+        {loading && (
+          <div className="absolute bottom-10 inset-x-6 z-10 flex flex-col items-center justify-center gap-1.5">
+            <span className="text-xs font-bold text-white uppercase tracking-wider animate-pulse flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+              {statusMessage}
+            </span>
           </div>
-        </div>
-      )}
-
-      {/* Privacy Guard Notice */}
-      <div className="flex gap-2 items-center justify-center text-[10px] text-slate-400 dark:text-zinc-500 font-medium">
-        <Shield className="w-3.5 h-3.5 text-emerald-500" />
-        No photos are shared publicly. GDPR & HIPAA Compliant.
+        )}
       </div>
 
-      <canvas ref={canvasRef} className="hidden" />
+      {/* Action Controls */}
+      <div className="flex flex-col gap-3 max-w-sm mx-auto w-full">
+        {!loading ? (
+          <button
+            onClick={triggerUpload}
+            className="w-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl py-3.5 text-xs font-extrabold shadow-md shadow-emerald-500/10 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
+          >
+            <Camera className="w-4 h-4" />
+            Choose Photo or Snap Camera
+          </button>
+        ) : (
+          <div className="w-full py-4 text-center text-xs text-slate-500 dark:text-zinc-500 flex items-center justify-center gap-2 font-medium">
+            <span className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></span>
+            Analyzing details...
+          </div>
+        )}
+
+        {/* Info Guard */}
+        <div className="flex gap-2 items-center justify-center text-[10px] text-slate-400 dark:text-zinc-500 font-semibold mt-1">
+          <Shield className="w-3.5 h-3.5 text-emerald-500" />
+          HIPAA & GDPR Compliant. Images are private.
+        </div>
+      </div>
+
+      {/* Hidden File Input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImageSelect}
+        className="hidden"
+        accept="image/*"
+      />
     </div>
   );
 };
