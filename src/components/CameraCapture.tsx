@@ -156,7 +156,12 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
     if (!files) return;
 
     Array.from(files).forEach(file => {
-      if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type)) {
+      const fileExt = file.name.split('.').pop()?.toLowerCase();
+      const isValidType = 
+        ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(file.type) || 
+        ['jpeg', 'jpg', 'png', 'webp', 'heic', 'heif'].includes(fileExt || '');
+
+      if (!isValidType) {
         setError("Unsupported format. Use JPG, PNG, or WEBP.");
         return;
       }
@@ -194,6 +199,11 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
       };
       reader.readAsDataURL(file);
     });
+
+    // Reset input value so the same file can be uploaded again if deleted
+    if (e.target) {
+      e.target.value = '';
+    }
   };
 
   const removeImage = (index: number) => {
@@ -641,7 +651,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
               ref={fileInputRef}
               onChange={handleFileUpload}
               className="hidden"
-              accept="image/jpeg, image/jpg, image/png, image/webp"
+              accept="image/*"
               multiple
             />
           </div>
