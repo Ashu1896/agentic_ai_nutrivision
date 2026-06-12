@@ -17,37 +17,60 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Stop camera stream on unmount
+  // Manage camera stream lifecycle inside a useEffect triggered by cameraActive
   useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, []);
+    let activeStream: MediaStream | null = null;
+    
+    const setupCamera = async () => {
+      setError(null);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }, // Default to rear camera on mobile
+          audio: false
+        });
+        activeStream = stream;
+        
+        // Wait a tiny fraction of a second for React's render loop to bind the ref
+        if (!videoRef.current) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
 
-  const startCamera = async () => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          const playPromise = videoRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(error => {
+              console.error("Auto-play failed:", error);
+            });
+          }
+        }
+      } catch (err: any) {
+        console.error("Camera access failed:", err);
+        setError("Unable to access camera. Please upload an image or check permissions.");
+        setCameraActive(false);
+      }
+    };
+
+    if (cameraActive) {
+      setupCamera();
+    }
+
+    return () => {
+      if (activeStream) {
+        activeStream.getTracks().forEach(track => track.stop());
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+    };
+  }, [cameraActive]);
+
+  const startCamera = () => {
     setError(null);
     setCameraActive(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }, // Default to rear camera on mobile
-        audio: false
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err: any) {
-      console.error("Camera access failed:", err);
-      setError("Unable to access camera. Please upload an image or check permissions.");
-      setCameraActive(false);
-    }
   };
 
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-    }
     setCameraActive(false);
   };
 
