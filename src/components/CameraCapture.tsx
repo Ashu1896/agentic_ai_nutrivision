@@ -402,7 +402,88 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onAnalysisComplete
         };
       }
 
-      onAnalysisComplete(mealData, [compressedImage]);
+      // Map API response format to client Meal structure
+      const formattedMeal: Meal = {
+        meal_name: mealData.meal_name || 'Scanned Meal',
+        recorded_at: new Date().toISOString(),
+        meal_type: 'Breakfast',
+        totals: {
+          calories: Math.round(mealData.totals?.calories ?? mealData.meal_totals?.calories ?? 0),
+          protein: Number((mealData.totals?.protein ?? mealData.meal_totals?.protein ?? 0).toFixed(1)),
+          carbs: Number((mealData.totals?.carbs ?? mealData.meal_totals?.carbs ?? 0).toFixed(1)),
+          fat: Number((mealData.totals?.fat ?? mealData.meal_totals?.fat ?? 0).toFixed(1)),
+          fiber: Number((mealData.totals?.fiber ?? mealData.meal_totals?.fiber ?? 0).toFixed(1)),
+          sugar: Number((mealData.totals?.sugar ?? mealData.meal_totals?.sugar ?? 0).toFixed(1)),
+          sodium: Math.round(mealData.totals?.sodium ?? mealData.meal_totals?.sodium ?? 0),
+          iron: Number((mealData.totals?.iron ?? mealData.meal_totals?.iron ?? 0).toFixed(1)),
+          calcium: Math.round(mealData.totals?.calcium ?? mealData.meal_totals?.calcium ?? 0)
+        },
+        health_score: {
+          overall: mealData.health_score?.overall ?? 70,
+          weight_loss: mealData.health_score?.weight_loss ?? 70,
+          muscle_gain: mealData.health_score?.muscle_gain ?? 70,
+          heart_health: mealData.health_score?.heart_health ?? 70,
+          diabetic_friendly: mealData.health_score?.diabetic_friendly ?? 70,
+          kid_friendly: mealData.health_score?.kid_friendly ?? 70,
+          athlete: mealData.health_score?.athlete ?? 70
+        },
+        ai_insights: mealData.ai_insights ? {
+          nutrient_deficiencies: mealData.ai_insights.nutrient_deficiencies || [],
+          excess_nutrients: mealData.ai_insights.excess_nutrients || [],
+          meal_recommendations: mealData.ai_insights.meal_recommendations || '',
+          health_recommendations: mealData.ai_insights.health_recommendations || '',
+          fitness_recommendations: mealData.ai_insights.fitness_recommendations || ''
+        } : undefined,
+        recommendations: mealData.recommendations || [],
+        food_items: (mealData.food_items || []).map((item: any) => ({
+          food_name: item.food_name || 'Unknown Food Item',
+          confidence: item.confidence ?? 0.9,
+          weight_grams: item.weight_grams ?? 100,
+          volume_ml: item.volume_ml,
+          serving_count: item.serving_count ?? 1,
+          plate_coverage_pct: item.plate_coverage_pct,
+          portion_size: item.portion_size || '1 serving',
+          ingredients: (item.ingredients || []).map((ing: any) => ({
+            name: ing.name || '',
+            amount: ing.amount || '',
+            confidence: ing.confidence ?? 0.9
+          })),
+          ingredient_estimates: item.ingredient_estimates ? {
+            oil_grams: item.ingredient_estimates.oil_grams ?? 0,
+            sugar_grams: item.ingredient_estimates.sugar_grams ?? 0,
+            salt_grams: item.ingredient_estimates.salt_grams ?? 0,
+            butter_grams: item.ingredient_estimates.butter_grams ?? 0,
+            sauce_grams: item.ingredient_estimates.sauce_grams ?? 0,
+            oil_confidence: item.ingredient_estimates.oil_confidence ?? 0.9,
+            sugar_confidence: item.ingredient_estimates.sugar_confidence ?? 0.9,
+            salt_confidence: item.ingredient_estimates.salt_confidence ?? 0.9,
+            butter_confidence: item.ingredient_estimates.butter_confidence ?? 0.9,
+            sauce_confidence: item.ingredient_estimates.sauce_confidence ?? 0.9
+          } : undefined,
+          nutrition: {
+            calories: item.nutrition?.calories ?? 0,
+            protein: item.nutrition?.protein ?? 0,
+            carbs: item.nutrition?.carbs ?? 0,
+            fat: item.nutrition?.fat ?? 0,
+            fiber: item.nutrition?.fiber ?? 0,
+            sugar: item.nutrition?.sugar ?? 0,
+            sodium: item.nutrition?.sodium ?? 0,
+            calcium: item.nutrition?.calcium ?? 0,
+            iron: item.nutrition?.iron ?? 0,
+            vitamin_c: item.nutrition?.vitamin_c ?? 0,
+            potassium: item.nutrition?.potassium,
+            vitamin_a: item.nutrition?.vitamin_a,
+            water_content_grams: item.nutrition?.water_content_grams,
+            cholesterol: item.nutrition?.cholesterol
+          },
+          cuisine: item.cuisine,
+          cooking_method: item.cooking_method
+        })),
+        confidence_low_warning: !!mealData.confidence_low_warning,
+        warning_message: mealData.warning_message || ''
+      };
+
+      onAnalysisComplete(formattedMeal, [compressedImage]);
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to scan food image. Please try another image.");
